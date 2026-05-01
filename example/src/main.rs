@@ -1,4 +1,4 @@
-use juniward_rs::{embed, extract, compute_costs, EmbedConfig};
+use juniward::{embed, extract, compute_costs, EmbedConfig};
 use std::fs;
 
 fn main() {
