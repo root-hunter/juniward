@@ -31,7 +31,7 @@ impl StcParams {
             0b1011011u64, // column 0
             0b1111001u64, // column 1
             0b1010011u64, // column 2
-            // Repeated cyclically for all n coefficients
+                          // Repeated cyclically for all n coefficients
         ];
         StcParams { h_hat, h_height }
     }
@@ -90,7 +90,10 @@ pub fn stc_embed(
     let k = message.len();
 
     if k > n {
-        return Err(StcError::PayloadTooLarge { payload: k, capacity: n });
+        return Err(StcError::PayloadTooLarge {
+            payload: k,
+            capacity: n,
+        });
     }
 
     let mut stego_bits = cover_bits.to_vec();
@@ -143,7 +146,8 @@ pub fn stc_extract(stego_bits: &[u8], k: usize, _params: &StcParams) -> Vec<u8> 
 
 /// Converts bytes to bits (MSB first)
 pub fn bytes_to_bits(bytes: &[u8]) -> Vec<u8> {
-    bytes.iter()
+    bytes
+        .iter()
         .flat_map(|b| (0..8).rev().map(move |i| (b >> i) & 1))
         .collect()
 }
@@ -152,9 +156,10 @@ pub fn bytes_to_bits(bytes: &[u8]) -> Vec<u8> {
 pub fn bits_to_bytes(bits: &[u8]) -> Vec<u8> {
     bits.chunks(8)
         .map(|chunk| {
-            chunk.iter().enumerate().fold(0u8, |acc, (i, &b)| {
-                acc | (b << (7 - i))
-            })
+            chunk
+                .iter()
+                .enumerate()
+                .fold(0u8, |acc, (i, &b)| acc | (b << (7 - i)))
         })
         .collect()
 }
@@ -169,10 +174,14 @@ pub enum StcError {
 impl std::fmt::Display for StcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StcError::PayloadTooLarge { payload, capacity } =>
-                write!(f, "Payload ({} bits) exceeds capacity ({} bits)", payload, capacity),
-            StcError::EmbeddingFailed =>
-                write!(f, "STC embedding failed: no valid path in trellis"),
+            StcError::PayloadTooLarge { payload, capacity } => write!(
+                f,
+                "Payload ({} bits) exceeds capacity ({} bits)",
+                payload, capacity
+            ),
+            StcError::EmbeddingFailed => {
+                write!(f, "STC embedding failed: no valid path in trellis")
+            }
         }
     }
 }

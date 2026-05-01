@@ -11,22 +11,22 @@
 /// Each filter is separable: applied first on rows then on columns.
 const DB8_LO: [f64; 8] = [
     -0.010597401784997278,
-     0.032883011666982945,
-     0.030841381835986965,
+    0.032883011666982945,
+    0.030841381835986965,
     -0.187034811718881,
     -0.027983769416983849,
-     0.630880767929590,
-     0.714846570552542,
-     0.230377813308855,
+    0.630880767929590,
+    0.714846570552542,
+    0.230377813308855,
 ];
 
 const DB8_HI: [f64; 8] = [
     -0.230377813308855,
-     0.714846570552542,
+    0.714846570552542,
     -0.630880767929590,
     -0.027983769416983849,
-     0.187034811718881,
-     0.030841381835986965,
+    0.187034811718881,
+    0.030841381835986965,
     -0.032883011666982945,
     -0.010597401784997278,
 ];
@@ -108,9 +108,13 @@ pub fn idct_image(dct_blocks: &[i16], width_blocks: usize, height_blocks: usize)
                             let cu = if u == 0 { 1.0 / 2f64.sqrt() } else { 1.0 };
                             let cv = if v == 0 { 1.0 / 2f64.sqrt() } else { 1.0 };
                             let coef = block[v * 8 + u] as f64;
-                            sum += cu * cv * coef
-                                * ((2 * x + 1) as f64 * u as f64 * std::f64::consts::PI / 16.0).cos()
-                                * ((2 * y + 1) as f64 * v as f64 * std::f64::consts::PI / 16.0).cos();
+                            sum += cu
+                                * cv
+                                * coef
+                                * ((2 * x + 1) as f64 * u as f64 * std::f64::consts::PI / 16.0)
+                                    .cos()
+                                * ((2 * y + 1) as f64 * v as f64 * std::f64::consts::PI / 16.0)
+                                    .cos();
                         }
                     }
                     let px_row = br * 8 + y;
@@ -123,45 +127,45 @@ pub fn idct_image(dct_blocks: &[i16], width_blocks: usize, height_blocks: usize)
     spatial
 }
 
-/// Calcola i costi J-UNIWARD per ogni coefficiente DCT modificabile.
+/// Computes J-UNIWARD costs for every modifiable DCT coefficient.
 ///
-/// Sfrutta la linearità della convoluzione: W(cover + delta) - W(cover) = W(delta).
-/// I delta wavelet per i 64 coefficienti DCT vengono precalcolati una volta sola,
-/// evitando di chiamare apply_wavelet_2d per ogni blocco.
+/// Exploits convolution linearity: W(cover + delta) - W(cover) = W(delta).
+/// The wavelet deltas for all 64 DCT basis functions are precomputed once,
+/// avoiding repeated calls to apply_wavelet_2d for every block.
 ///
-/// Ritorna un vettore di costi, uno per coefficiente DCT (n_blocks * 64).
+/// Returns a cost vector with one entry per DCT coefficient (n_blocks * 64).
 pub fn compute_jwuniward_costs(
     dct_blocks: &[i16],
     width_blocks: usize,
     height_blocks: usize,
-    sigma: f64, // stabilizzatore numerico, tipicamente 1e-10
+    sigma: f64, // numerical stabilizer, typically 1e-10
 ) -> Vec<f64> {
     let n_blocks = width_blocks * height_blocks;
     let width = width_blocks * 8;
     let height = height_blocks * 8;
 
-    // 1. Ricostruisce immagine spaziale dalla cover
+    // 1. Reconstruct spatial image from cover
     let spatial = idct_image(dct_blocks, width_blocks, height_blocks);
 
-    // 2. Precalcola i 3 residui wavelet della cover (HL, LH, HH) — 3 chiamate totali
+    // 2. Precompute the 3 cover wavelet residuals (HL, LH, HH) — 3 calls total
     let w_hl = apply_wavelet_2d(&spatial, height, width, &DB8_LO, &DB8_HI);
     let w_lh = apply_wavelet_2d(&spatial, height, width, &DB8_HI, &DB8_LO);
     let w_hh = apply_wavelet_2d(&spatial, height, width, &DB8_HI, &DB8_HI);
     let wavelets_cover: [&Vec<f64>; 3] = [&w_hl, &w_lh, &w_hh];
 
-    // 3. Precalcola le funzioni base DCT 8x8
+    // 3. Precompute the 64 DCT basis functions
     let basis = precompute_dct_basis();
 
-    // 4. Precalcola i delta wavelet per ognuno dei 64 coefficienti DCT.
-    //    Per la linearità della convoluzione: W(cover+delta) - W(cover) = W(delta).
-    //    Il delta è la funzione base DCT/4 su un blocco 8x8 immerso in un contesto zero.
-    //    Area di influenza: il filtro da 8 tap estende il supporto di pad=8 pixel per lato.
-    //    → contesto: (8 + 2*pad) × (8 + 2*pad) = 24×24 pixel.
-    //    Questo sostituisce 691.200 chiamate a apply_wavelet_2d con sole 192.
+    // 4. Precompute wavelet deltas for each of the 64 DCT coefficients.
+    //    By convolution linearity: W(cover+delta) - W(cover) = W(delta).
+    //    The delta is the DCT basis function / 4 on an 8x8 block embedded in a zero context.
+    //    Influence area: the 8-tap filter extends support by pad=8 pixels on each side.
+    //    → context: (8 + 2*pad) × (8 + 2*pad) = 24×24 pixels.
+    //    This replaces 691,200 calls to apply_wavelet_2d with just 192.
     let pad = DB8_LO.len(); // 8
     let ctx_size = 8 + 2 * pad; // 24
 
-    // delta_w[coeff_idx][subbanda] = vettore ctx_size×ctx_size con la risposta wavelet del delta
+    // delta_w[coeff_idx][subband] = ctx_size×ctx_size vector with the wavelet response of the delta
     let mut delta_w: Vec<[Vec<f64>; 3]> = Vec::with_capacity(64);
     for coeff_idx in 0..64usize {
         let mut ctx = vec![0.0f64; ctx_size * ctx_size];
@@ -176,8 +180,8 @@ pub fn compute_jwuniward_costs(
         delta_w.push([dw_hl, dw_lh, dw_hh]);
     }
 
-    // 5. Calcola i costi: per ogni blocco e coefficiente, accumula la variazione relativa
-    //    usando i delta wavelet precalcolati.
+    // 5. Compute costs: for each block and coefficient, accumulate the relative variation
+    //    using the precomputed wavelet deltas.
     let mut costs = vec![0.0f64; n_blocks * 64];
 
     for br in 0..height_blocks {
@@ -194,8 +198,8 @@ pub fn compute_jwuniward_costs(
                     let w_cover = wavelets_cover[k];
                     let dw_k = &dw[k];
 
-                    // Il contesto è centrato sul blocco:
-                    // ctx[r_ctx][c_ctx] corrisponde all'immagine in
+                    // The context is centered on the block:
+                    // ctx[r_ctx][c_ctx] maps to image position
                     // (px_r - pad + r_ctx, px_c - pad + c_ctx)
                     for r_ctx in 0..ctx_size {
                         let r_img = px_r as isize - pad as isize + r_ctx as isize;
@@ -229,8 +233,8 @@ pub fn compute_jwuniward_costs(
     costs
 }
 
-/// Precomputa le 64 funzioni base DCT 8x8
-/// basis[coeff_idx][pixel_idx] = valore della funzione base
+/// Precomputes the 64 DCT 8x8 basis functions.
+/// basis[coeff_idx][pixel_idx] = value of the basis function at that pixel.
 fn precompute_dct_basis() -> Vec<Vec<f64>> {
     let mut basis = vec![vec![0.0f64; 64]; 64];
     for v in 0..8usize {
@@ -239,7 +243,8 @@ fn precompute_dct_basis() -> Vec<Vec<f64>> {
             let cv = if v == 0 { 1.0 / 2f64.sqrt() } else { 1.0 };
             for y in 0..8usize {
                 for x in 0..8usize {
-                    basis[v * 8 + u][y * 8 + x] = cu * cv
+                    basis[v * 8 + u][y * 8 + x] = cu
+                        * cv
                         * ((2 * x + 1) as f64 * u as f64 * std::f64::consts::PI / 16.0).cos()
                         * ((2 * y + 1) as f64 * v as f64 * std::f64::consts::PI / 16.0).cos();
                 }
