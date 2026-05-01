@@ -1,14 +1,14 @@
 /// J-UNIWARD: JPEG Universal Wavelet Relative Distortion
 ///
-/// Calcola il costo di embedding per ogni coefficiente DCT.
-/// Costi bassi = zone texturizzate (sicure da modificare)
-/// Costi alti  = zone lisce (modifiche visibili)
+/// Computes the embedding cost for each DCT coefficient.
+/// Low costs = textured areas (safe to modify)
+/// High costs = smooth areas (modifications are visible)
 
-/// Filtri wavelet di Daubechies 8-tap (DB8) nelle 3 direzioni:
-/// - HH (diagonale)
-/// - HL (orizzontale)
-/// - LH (verticale)
-/// Ogni filtro è separabile: applicato prima su righe poi su colonne.
+/// Daubechies 8-tap (DB8) wavelet filters in 3 directions:
+/// - HH (diagonal)
+/// - HL (horizontal)
+/// - LH (vertical)
+/// Each filter is separable: applied first on rows then on columns.
 const DB8_LO: [f64; 8] = [
     -0.010597401784997278,
      0.032883011666982945,
@@ -31,7 +31,7 @@ const DB8_HI: [f64; 8] = [
     -0.010597401784997278,
 ];
 
-/// Applica convoluzione 1D con padding "reflect" (bordi riflessi)
+/// Applies 1D convolution with reflect padding.
 fn convolve1d(signal: &[f64], kernel: &[f64]) -> Vec<f64> {
     let n = signal.len();
     let k = kernel.len();
@@ -41,7 +41,7 @@ fn convolve1d(signal: &[f64], kernel: &[f64]) -> Vec<f64> {
     for i in 0..n {
         let mut sum = 0.0;
         for j in 0..k {
-            // Indice con reflect padding
+            // Index with reflect padding
             let idx = i as isize + j as isize - pad as isize;
             let idx = reflect_index(idx, n);
             sum += signal[idx] * kernel[k - 1 - j];
@@ -58,8 +58,8 @@ fn reflect_index(idx: isize, n: usize) -> usize {
     idx.clamp(0, n - 1) as usize
 }
 
-/// Applica filtro wavelet separabile 2D a una matrice rows×cols
-/// Ritorna la matrice filtrata linearizzata (row-major)
+/// Applies a separable 2D wavelet filter to a rows×cols matrix.
+/// Returns the filtered matrix linearized in row-major order.
 fn apply_wavelet_2d(
     img: &[f64],
     rows: usize,
@@ -67,7 +67,7 @@ fn apply_wavelet_2d(
     row_filter: &[f64],
     col_filter: &[f64],
 ) -> Vec<f64> {
-    // Prima passo: filtra ogni riga
+    // First pass: filter each row
     let mut tmp = vec![0.0f64; rows * cols];
     for r in 0..rows {
         let row_slice = &img[r * cols..(r + 1) * cols];
@@ -75,7 +75,7 @@ fn apply_wavelet_2d(
         tmp[r * cols..(r + 1) * cols].copy_from_slice(&filtered);
     }
 
-    // Secondo passo: filtra ogni colonna
+    // Second pass: filter each column
     let mut out = vec![0.0f64; rows * cols];
     for c in 0..cols {
         let col_vec: Vec<f64> = (0..rows).map(|r| tmp[r * cols + c]).collect();
@@ -87,8 +87,8 @@ fn apply_wavelet_2d(
     out
 }
 
-/// Ricostruisce l'immagine spaziale dai blocchi DCT.
-/// Usa IDCT 8x8 manuale (formula diretta).
+/// Reconstructs the spatial image from DCT blocks.
+/// Uses a manual 8x8 IDCT (direct formula).
 pub fn idct_image(dct_blocks: &[i16], width_blocks: usize, height_blocks: usize) -> Vec<f64> {
     let width = width_blocks * 8;
     let height = height_blocks * 8;
