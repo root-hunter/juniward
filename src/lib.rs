@@ -3,7 +3,7 @@
 /// # Quick start
 ///
 /// ```no_run
-/// use juniward_rs::{embed, extract};
+/// use juniward::{embed, extract};
 ///
 /// let cover = std::fs::read("cover.jpg").unwrap();
 /// let message = b"secret message";
