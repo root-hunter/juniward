@@ -58,6 +58,7 @@ dependencies = [
 name = "juniward-rs"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "mozjpeg-sys",
 ]
 

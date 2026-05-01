@@ -2,68 +2,68 @@
 
 /// STC — Syndrome-Trellis Coding
 ///
-/// Embedding: trova la sequenza di modifiche a costo minimo
-///            tale che H·y = m  (in GF2)
+/// Embedding: finds the minimum-cost modification sequence
+///            such that H·y = m  (in GF2)
 ///
-/// Decoding:  calcola m = H·y  (semplice moltiplicazione GF2)
+/// Decoding:  computes m = H·y  (simple GF2 matrix-vector product)
 
 /// Parametri STC
 pub struct StcParams {
-    /// Vettore generatore della matrice H (altezza del trellis)
-    /// Determina la struttura della matrice parity-check.
-    /// Deve essere condiviso tra sender e receiver (insieme alla chiave).
+    /// Generator vector for matrix H (trellis height).
+    /// Determines the structure of the parity-check matrix.
+    /// Must be shared between sender and receiver (together with the key).
     pub h_hat: Vec<u64>,
 
-    /// Numero di stati nel trellis = 2^(len(h_hat)*bits_per_word)
-    /// In pratica usiamo h_hat come colonne di H, ogni elemento = 1 word
-    pub h_height: usize, // numero di righe di H per "colonna" = log2(num_states)
+    /// Number of trellis states = 2^(len(h_hat)*bits_per_word).
+    /// In practice h_hat is used as columns of H, each element = 1 word.
+    pub h_height: usize, // number of rows of H per "column" = log2(num_states)
 }
 
 impl StcParams {
-    /// Crea parametri STC con h_hat standard (da letteratura)
-    /// h_height = 7 → 128 stati, buon compromesso velocità/sicurezza
+    /// Creates STC parameters with standard h_hat (from literature).
+    /// h_height = 7 → 128 states, good speed/security trade-off.
     pub fn new(h_height: usize) -> Self {
-        // h_hat: vettore di interi a 64 bit che definisce H
-        // Ogni bit di h_hat[i] definisce quale riga di H viene XORata
-        // quando si processa il coefficiente i-esimo.
-        // Valore standard dalla letteratura per h=7:
+        // h_hat: vector of 64-bit integers defining H.
+        // Each bit of h_hat[i] defines which row of H is XORed
+        // when processing the i-th coefficient.
+        // Standard values from literature for h=7:
         let h_hat = vec![
-            0b1011011u64, // colonna 0
-            0b1111001u64, // colonna 1
-            0b1010011u64, // colonna 2
-            // Viene ripetuto ciclicamente per tutti gli n coefficienti
+            0b1011011u64, // column 0
+            0b1111001u64, // column 1
+            0b1010011u64, // column 2
+            // Repeated cyclically for all n coefficients
         ];
         StcParams { h_hat, h_height }
     }
 
-    /// Numero di stati nel trellis
+    /// Number of trellis states.
     pub fn num_states(&self) -> usize {
         1 << self.h_height
     }
 
-    /// Calcola la transizione di stato quando si sceglie il valore y_i
-    /// per il coefficiente i-esimo.
-    /// Lo stato è un intero in [0, 2^h_height).
+    /// Computes the state transition when choosing value y_i
+    /// for the i-th coefficient.
+    /// The state is an integer in [0, 2^h_height).
     ///
-    /// H è costruita come segue: la colonna i è h_hat[i % h_hat.len()],
-    /// ma ruotata di (i / h_hat.len()) * 1 bit (struttura a banda).
+    /// H is constructed as follows: column i is h_hat[i % h_hat.len()],
+    /// rotated by (i / h_hat.len()) * 1 bit (banded structure).
     #[inline]
     pub fn next_state(&self, state: usize, coeff_idx: usize, y_bit: u8) -> usize {
         if y_bit == 0 {
-            // Se y_i = 0, la colonna di H contribuisce 0 → stato invariato
+            // If y_i = 0, column of H contributes 0 → state unchanged
             state
         } else {
-            // Se y_i = 1, XOR con la colonna i di H
+            // If y_i = 1, XOR with column i of H
             let col = self.h_column(coeff_idx);
             state ^ col
         }
     }
 
-    /// Ritorna la colonna i-esima di H come maschera di bit
+    /// Returns the i-th column of H as a bitmask.
     #[inline]
     fn h_column(&self, i: usize) -> usize {
         let base = self.h_hat[i % self.h_hat.len()] as usize;
-        // Rotazione ciclica per garantire che H sia "universale"
+        // Cyclic rotation to ensure H is "universal"
         let shift = (i / self.h_hat.len()) % self.h_height;
         let mask = (1 << self.h_height) - 1;
         ((base << shift) | (base >> (self.h_height - shift))) & mask
@@ -72,14 +72,14 @@ impl StcParams {
 
 const INF_COST: f64 = f64::INFINITY;
 
-/// Embedding STC tramite parity interleaving.
+/// STC embedding via parity interleaving.
 ///
-/// I coefficienti vengono divisi in k gruppi con interleaving:
-///   gruppo j = { j, j+k, j+2k, ... }
-/// Per ogni gruppo la parità dei bit stego deve essere uguale a message[j].
-/// Se non lo è, si flippano il bit di costo minimo nel gruppo.
+/// Coefficients are divided into k groups with interleaving:
+///   group j = { j, j+k, j+2k, ... }
+/// For each group the parity of the stego bits must equal message[j].
+/// If not, the minimum-cost bit in the group is flipped.
 ///
-/// L'estrazione è semplicemente il ricalcolo delle stesse parità → correttezza garantita.
+/// Extraction is simply recomputing the same parities → correctness guaranteed.
 pub fn stc_embed(
     cover_bits: &[u8],
     costs: &[f64],
@@ -120,10 +120,10 @@ pub fn stc_embed(
     Ok(stego_bits)
 }
 
-/// Decoding STC: estrae il messaggio dall'immagine stego.
+/// STC decoding: extracts the message from the stego image.
 ///
-/// Per ogni gruppo j, calcola la parità XOR dei bit stego
-/// nelle posizioni {j, j+k, j+2k, ...} — simmetrico all'embedding.
+/// For each group j, computes the XOR parity of the stego bits
+/// at positions {j, j+k, j+2k, ...} — symmetric to embedding.
 pub fn stc_extract(stego_bits: &[u8], k: usize, _params: &StcParams) -> Vec<u8> {
     let n = stego_bits.len();
     let mut message = vec![0u8; k];
@@ -141,14 +141,14 @@ pub fn stc_extract(stego_bits: &[u8], k: usize, _params: &StcParams) -> Vec<u8> 
     message
 }
 
-/// Converte bytes in bit (MSB first)
+/// Converts bytes to bits (MSB first)
 pub fn bytes_to_bits(bytes: &[u8]) -> Vec<u8> {
     bytes.iter()
         .flat_map(|b| (0..8).rev().map(move |i| (b >> i) & 1))
         .collect()
 }
 
-/// Converte bit in bytes (MSB first)
+/// Converts bits to bytes (MSB first)
 pub fn bits_to_bytes(bits: &[u8]) -> Vec<u8> {
     bits.chunks(8)
         .map(|chunk| {
@@ -159,7 +159,7 @@ pub fn bits_to_bytes(bits: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Errori STC
+/// STC errors
 #[derive(Debug)]
 pub enum StcError {
     PayloadTooLarge { payload: usize, capacity: usize },
@@ -170,9 +170,9 @@ impl std::fmt::Display for StcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StcError::PayloadTooLarge { payload, capacity } =>
-                write!(f, "Payload ({} bit) supera capacità ({} bit)", payload, capacity),
+                write!(f, "Payload ({} bits) exceeds capacity ({} bits)", payload, capacity),
             StcError::EmbeddingFailed =>
-                write!(f, "STC embedding fallito: nessun percorso valido nel trellis"),
+                write!(f, "STC embedding failed: no valid path in trellis"),
         }
     }
 }

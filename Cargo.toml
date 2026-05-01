@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 mozjpeg-sys = "2"
+
+[build-dependencies]
+cc = "1"
