@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 mozjpeg-sys = "2"
 rayon = "1"
+sha2 = "0.10"
 
 [build-dependencies]
 cc = "1"

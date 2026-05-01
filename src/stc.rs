@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use sha2::{Digest, Sha256};
+
 /// STC — Syndrome-Trellis Coding
 ///
 /// Embedding: finds the minimum-cost modification sequence
@@ -33,6 +35,37 @@ impl StcParams {
             0b1010011u64, // column 2
                           // Repeated cyclically for all n coefficients
         ];
+        StcParams { h_hat, h_height }
+    }
+
+    /// Creates STC parameters from a secret key.
+    ///
+    /// Sender and receiver must use the same key, trellis height, and number
+    /// of generated columns. The generated columns are deterministic, non-zero
+    /// bitmasks constrained to `h_height` bits.
+    pub fn from_key(key: &[u8], h_height: usize, n_cols: usize) -> Self {
+        let n_cols = n_cols.max(1);
+        let mask = if h_height >= u64::BITS as usize {
+            u64::MAX
+        } else {
+            (1u64 << h_height) - 1
+        };
+
+        let h_hat = (0..n_cols)
+            .map(|col| {
+                let mut hasher = Sha256::new();
+                hasher.update(b"juniward-stc-h-hat-v1");
+                hasher.update(key);
+                hasher.update((h_height as u64).to_le_bytes());
+                hasher.update((col as u64).to_le_bytes());
+                let digest = hasher.finalize();
+
+                let mut word = u64::from_le_bytes(digest[..8].try_into().expect("8-byte digest"));
+                word &= mask;
+                if word == 0 { 1 } else { word }
+            })
+            .collect();
+
         StcParams { h_hat, h_height }
     }
 

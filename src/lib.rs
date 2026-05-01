@@ -15,7 +15,6 @@
 /// let recovered = extract(&stego, message.len()).unwrap();
 /// assert_eq!(recovered, message);
 /// ```
-
 pub mod stc;
 pub mod uniward;
 
@@ -35,7 +34,10 @@ pub enum JuniwardError {
     /// The JPEG could not be decoded.
     InvalidJpeg(String),
     /// The message is too long for the cover image.
-    PayloadTooLarge { payload_bits: usize, max_bits: usize },
+    PayloadTooLarge {
+        payload_bits: usize,
+        max_bits: usize,
+    },
     /// STC embedding failed.
     EmbeddingFailed(StcError),
 }
@@ -44,7 +46,10 @@ impl std::fmt::Display for JuniwardError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             JuniwardError::InvalidJpeg(s) => write!(f, "Invalid JPEG: {s}"),
-            JuniwardError::PayloadTooLarge { payload_bits, max_bits } => write!(
+            JuniwardError::PayloadTooLarge {
+                payload_bits,
+                max_bits,
+            } => write!(
                 f,
                 "Payload too large: {payload_bits} bits requested, max safe payload is {max_bits} bits"
             ),
@@ -118,6 +123,17 @@ impl CostStats {
 /// - [`JuniwardError::PayloadTooLarge`] if the message exceeds the safe capacity.
 /// - [`JuniwardError::EmbeddingFailed`] if STC cannot find a valid path.
 pub fn embed(cover: &[u8], message: &[u8], cfg: EmbedConfig) -> Result<Vec<u8>, JuniwardError> {
+    let params = StcParams::new(cfg.stc_h_height);
+    embed_with_params(cover, message, cfg, &params)
+}
+
+/// Same as [`embed`] but with custom [`StcParams`].
+pub fn embed_with_params(
+    cover: &[u8],
+    message: &[u8],
+    cfg: EmbedConfig,
+    params: &StcParams,
+) -> Result<Vec<u8>, JuniwardError> {
     let jpeg = unsafe { read_jpeg_dct(cover) };
 
     // J-UNIWARD costs
@@ -175,8 +191,7 @@ pub fn embed(cover: &[u8], message: &[u8], cfg: EmbedConfig) -> Result<Vec<u8>, 
         .collect();
 
     // STC embedding
-    let params = StcParams::new(cfg.stc_h_height);
-    let stego_bits = stc_embed(&cover_bits, &ac_costs, &message_bits, &params)?;
+    let stego_bits = stc_embed(&cover_bits, &ac_costs, &message_bits, params)?;
 
     // Reconstruct DCT blocks with flipped LSBs
     let mut stego_blocks = jpeg.blocks.clone();
@@ -245,13 +260,7 @@ pub fn extract_with_params(
 /// Useful for analysis or custom embedding pipelines.
 pub fn compute_costs(jpeg_data: &[u8], sigma: f64) -> (Vec<f64>, CostStats) {
     let jpeg = unsafe { read_jpeg_dct(jpeg_data) };
-    let costs = compute_jwuniward_costs(
-        &jpeg.blocks,
-        jpeg.width_blocks,
-        jpeg.height_blocks,
-        sigma,
-    );
+    let costs = compute_jwuniward_costs(&jpeg.blocks, jpeg.width_blocks, jpeg.height_blocks, sigma);
     let stats = CostStats::compute(&costs);
     (costs, stats)
 }
-

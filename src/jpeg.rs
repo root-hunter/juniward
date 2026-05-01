@@ -1,5 +1,4 @@
 /// JPEG DCT I/O helpers (mozjpeg-sys wrappers).
-
 use mozjpeg_sys::*;
 
 pub struct JpegDct {
@@ -63,7 +62,12 @@ pub unsafe fn read_jpeg_dct(data: &[u8]) -> JpegDct {
         jpeg_finish_decompress(&mut cinfo);
         jpeg_destroy_decompress(&mut cinfo);
 
-        JpegDct { blocks, width_blocks, height_blocks, qt }
+        JpegDct {
+            blocks,
+            width_blocks,
+            height_blocks,
+            qt,
+        }
     }
 }
 

@@ -3,7 +3,6 @@
 /// Computes the embedding cost for each DCT coefficient.
 /// Low costs = textured areas (safe to modify)
 /// High costs = smooth areas (modifications are visible)
-
 use rayon::prelude::*;
 use std::sync::LazyLock;
 
@@ -11,22 +10,22 @@ use std::sync::LazyLock;
 
 const DB8_LO: [f64; 8] = [
     -0.010597401784997278,
-     0.032883011666982945,
-     0.030841381835986965,
+    0.032883011666982945,
+    0.030841381835986965,
     -0.187034811718881,
     -0.027983769416983849,
-     0.630880767929590,
-     0.714846570552542,
-     0.230377813308855,
+    0.630880767929590,
+    0.714846570552542,
+    0.230377813308855,
 ];
 
 const DB8_HI: [f64; 8] = [
     -0.230377813308855,
-     0.714846570552542,
+    0.714846570552542,
     -0.630880767929590,
     -0.027983769416983849,
-     0.187034811718881,
-     0.030841381835986965,
+    0.187034811718881,
+    0.030841381835986965,
     -0.032883011666982945,
     -0.010597401784997278,
 ];
@@ -109,8 +108,12 @@ pub fn idct_image(dct_blocks: &[i16], width_blocks: usize, height_blocks: usize)
 fn reflect_index(idx: isize, n: usize) -> usize {
     let n = n as isize;
     let mut i = idx;
-    if i < 0 { i = -i - 1; }
-    if i >= n { i = 2 * n - i - 1; }
+    if i < 0 {
+        i = -i - 1;
+    }
+    if i >= n {
+        i = 2 * n - i - 1;
+    }
     i.clamp(0, n - 1) as usize
 }
 
@@ -124,7 +127,8 @@ fn convolve1d_into(signal: &[f64], kernel: &[f64], out: &mut [f64]) {
     for i in 0..pad.min(n) {
         let mut sum = 0.0;
         for j in 0..k {
-            sum += signal[reflect_index(i as isize + j as isize - pad as isize, n)] * kernel[k - 1 - j];
+            sum += signal[reflect_index(i as isize + j as isize - pad as isize, n)]
+                * kernel[k - 1 - j];
         }
         out[i] = sum;
     }
@@ -139,7 +143,8 @@ fn convolve1d_into(signal: &[f64], kernel: &[f64], out: &mut [f64]) {
     for i in center_end.max(pad)..n {
         let mut sum = 0.0;
         for j in 0..k {
-            sum += signal[reflect_index(i as isize + j as isize - pad as isize, n)] * kernel[k - 1 - j];
+            sum += signal[reflect_index(i as isize + j as isize - pad as isize, n)]
+                * kernel[k - 1 - j];
         }
         out[i] = sum;
     }
@@ -147,19 +152,33 @@ fn convolve1d_into(signal: &[f64], kernel: &[f64], out: &mut [f64]) {
 
 // ─── 2D separable wavelet filter ──────────────────────────────────────────────
 
-fn apply_wavelet_2d(img: &[f64], rows: usize, cols: usize, row_filter: &[f64], col_filter: &[f64]) -> Vec<f64> {
+fn apply_wavelet_2d(
+    img: &[f64],
+    rows: usize,
+    cols: usize,
+    row_filter: &[f64],
+    col_filter: &[f64],
+) -> Vec<f64> {
     let mut tmp = vec![0.0f64; rows * cols];
     for r in 0..rows {
-        convolve1d_into(&img[r * cols..(r + 1) * cols], col_filter, &mut tmp[r * cols..(r + 1) * cols]);
+        convolve1d_into(
+            &img[r * cols..(r + 1) * cols],
+            col_filter,
+            &mut tmp[r * cols..(r + 1) * cols],
+        );
     }
 
     let mut out = vec![0.0f64; rows * cols];
     let mut col_buf = vec![0.0f64; rows];
     let mut col_out = vec![0.0f64; rows];
     for c in 0..cols {
-        for r in 0..rows { col_buf[r] = tmp[r * cols + c]; }
+        for r in 0..rows {
+            col_buf[r] = tmp[r * cols + c];
+        }
         convolve1d_into(&col_buf, row_filter, &mut col_out);
-        for r in 0..rows { out[r * cols + c] = col_out[r]; }
+        for r in 0..rows {
+            out[r * cols + c] = col_out[r];
+        }
     }
     out
 }
@@ -215,9 +234,11 @@ pub fn compute_jwuniward_costs(
     let delta_w: Vec<[Vec<f64>; 3]> = (0..64usize)
         .map(|coeff_idx| {
             let mut ctx = vec![0.0f64; ctx_size * ctx_size];
-            for y in 0..8 { for x in 0..8 {
-                ctx[(y + pad) * ctx_size + (x + pad)] = basis[coeff_idx][y * 8 + x] / 4.0;
-            }}
+            for y in 0..8 {
+                for x in 0..8 {
+                    ctx[(y + pad) * ctx_size + (x + pad)] = basis[coeff_idx][y * 8 + x] / 4.0;
+                }
+            }
             let dw_hl = apply_wavelet_2d(&ctx, ctx_size, ctx_size, &DB8_LO, &DB8_HI);
             let dw_lh = apply_wavelet_2d(&ctx, ctx_size, ctx_size, &DB8_HI, &DB8_LO);
             let dw_hh = apply_wavelet_2d(&ctx, ctx_size, ctx_size, &DB8_HI, &DB8_HI);
