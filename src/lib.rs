@@ -144,13 +144,28 @@ pub fn embed_with_params(
         cfg.sigma,
     );
 
-    // Count non-zero AC coefficients for capacity check
-    let nz_ac: usize = jpeg
-        .blocks
-        .iter()
-        .enumerate()
-        .filter(|(i, v)| i % 64 != 0 && **v != 0)
-        .count();
+    let n_blocks = jpeg.width_blocks * jpeg.height_blocks;
+    let ac_len = n_blocks * 63;
+    let mut nz_ac = 0usize;
+    let mut cover_bits = Vec::with_capacity(ac_len);
+    let mut ac_costs = Vec::with_capacity(ac_len);
+
+    // Build AC-only views and capacity in one cache-friendly pass.
+    for (block, cost_block) in jpeg.blocks.chunks_exact(64).zip(costs.chunks_exact(64)) {
+        for i in 1..64 {
+            let coeff = block[i];
+            if coeff != 0 {
+                nz_ac += 1;
+            }
+            cover_bits.push((coeff.unsigned_abs() & 1) as u8);
+            ac_costs.push(if coeff == 0 || coeff == 1 || coeff == -1 {
+                f64::INFINITY
+            } else {
+                cost_block[i]
+            });
+        }
+    }
+
     let max_bits = (nz_ac as f64 * cfg.max_bpnzac) as usize;
     let message_bits = bytes_to_bits(message);
 
@@ -161,55 +176,25 @@ pub fn embed_with_params(
         });
     }
 
-    // Build cover-bit and cost views over AC coefficients only
-    let cover_bits: Vec<u8> = jpeg
-        .blocks
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| i % 64 != 0)
-        .map(|(_, v): (_, &i16)| (v.unsigned_abs() & 1) as u8)
-        .collect();
-
-    let ac_costs: Vec<f64> = costs
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| i % 64 != 0)
-        .zip(
-            jpeg.blocks
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| i % 64 != 0)
-                .map(|(_, v)| v),
-        )
-        .map(|((_, &c), &v)| {
-            if v == 0 || v == 1 || v == -1 {
-                f64::INFINITY
-            } else {
-                c
-            }
-        })
-        .collect();
-
     // STC embedding
     let stego_bits = stc_embed(&cover_bits, &ac_costs, &message_bits, params)?;
 
     // Reconstruct DCT blocks with flipped LSBs
     let mut stego_blocks = jpeg.blocks.clone();
     let mut stego_idx = 0usize;
-    for (coeff_idx, coeff) in stego_blocks.iter_mut().enumerate() {
-        if coeff_idx % 64 == 0 {
-            continue;
-        }
-        let orig_bit = ((*coeff as i16).unsigned_abs() & 1) as u8;
-        let new_bit = stego_bits[stego_idx];
-        stego_idx += 1;
+    for block in stego_blocks.chunks_exact_mut(64) {
+        for coeff in &mut block[1..] {
+            let orig_bit = (coeff.unsigned_abs() & 1) as u8;
+            let new_bit = stego_bits[stego_idx];
+            stego_idx += 1;
 
-        if orig_bit != new_bit {
-            if *coeff > 0 {
-                *coeff ^= 1;
-            } else if *coeff < 0 {
-                let abs_new = (coeff.unsigned_abs() ^ 1) as i16;
-                *coeff = -abs_new;
+            if orig_bit != new_bit {
+                if *coeff > 0 {
+                    *coeff ^= 1;
+                } else if *coeff < 0 {
+                    let abs_new = (coeff.unsigned_abs() ^ 1) as i16;
+                    *coeff = -abs_new;
+                }
             }
         }
     }
@@ -239,13 +224,13 @@ pub fn extract_with_params(
 ) -> Result<Vec<u8>, JuniwardError> {
     let jpeg = unsafe { read_jpeg_dct(stego) };
 
-    let stego_bits: Vec<u8> = jpeg
-        .blocks
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| i % 64 != 0)
-        .map(|(_, v): (_, &i16)| (v.unsigned_abs() & 1) as u8)
-        .collect();
+    let n_blocks = jpeg.width_blocks * jpeg.height_blocks;
+    let mut stego_bits = Vec::with_capacity(n_blocks * 63);
+    for block in jpeg.blocks.chunks_exact(64) {
+        for coeff in &block[1..] {
+            stego_bits.push((coeff.unsigned_abs() & 1) as u8);
+        }
+    }
 
     let message_bits_len = message_len * 8;
     let recovered_bits = stc_extract(&stego_bits, message_bits_len, params);

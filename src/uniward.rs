@@ -44,6 +44,9 @@ static COS8: LazyLock<[[f64; 8]; 8]> = LazyLock::new(|| {
 });
 
 const ISQRT2: f64 = 0.7071067811865476_f64;
+const WAVELET_PAD: usize = DB8_LO.len();
+const DELTA_CTX_SIZE: usize = 8 + 2 * WAVELET_PAD;
+const DELTA_CTX_AREA: usize = DELTA_CTX_SIZE * DELTA_CTX_SIZE;
 
 // ─── Separable 8×8 IDCT ───────────────────────────────────────────────────────
 
@@ -160,26 +163,24 @@ fn apply_wavelet_2d(
     col_filter: &[f64],
 ) -> Vec<f64> {
     let mut tmp = vec![0.0f64; rows * cols];
-    for r in 0..rows {
-        convolve1d_into(
-            &img[r * cols..(r + 1) * cols],
-            col_filter,
-            &mut tmp[r * cols..(r + 1) * cols],
-        );
-    }
+    tmp.par_chunks_mut(cols).enumerate().for_each(|(r, row)| {
+        convolve1d_into(&img[r * cols..(r + 1) * cols], col_filter, row);
+    });
 
     let mut out = vec![0.0f64; rows * cols];
-    let mut col_buf = vec![0.0f64; rows];
-    let mut col_out = vec![0.0f64; rows];
-    for c in 0..cols {
-        for r in 0..rows {
-            col_buf[r] = tmp[r * cols + c];
+    out.par_chunks_mut(cols).enumerate().for_each(|(r, row)| {
+        let k = row_filter.len();
+        let pad = k / 2;
+
+        for j in 0..k {
+            let src_r = reflect_index(r as isize + j as isize - pad as isize, rows);
+            let weight = row_filter[k - 1 - j];
+            let src = &tmp[src_r * cols..(src_r + 1) * cols];
+            for c in 0..cols {
+                row[c] += src[c] * weight;
+            }
         }
-        convolve1d_into(&col_buf, row_filter, &mut col_out);
-        for r in 0..rows {
-            out[r * cols + c] = col_out[r];
-        }
-    }
+    });
     out
 }
 
@@ -201,6 +202,40 @@ fn precompute_dct_basis() -> [[f64; 64]; 64] {
     }
     basis
 }
+
+static DCT_BASIS: LazyLock<[[f64; 64]; 64]> = LazyLock::new(precompute_dct_basis);
+
+static DELTA_WAVELETS: LazyLock<Vec<[Box<[f64; DELTA_CTX_AREA]>; 3]>> = LazyLock::new(|| {
+    let mut delta_w = Vec::with_capacity(64);
+
+    for coeff_idx in 0..64usize {
+        let mut ctx = vec![0.0f64; DELTA_CTX_AREA];
+        for y in 0..8 {
+            for x in 0..8 {
+                ctx[(y + WAVELET_PAD) * DELTA_CTX_SIZE + (x + WAVELET_PAD)] =
+                    DCT_BASIS[coeff_idx][y * 8 + x] / 4.0;
+            }
+        }
+
+        let dw_hl = apply_wavelet_2d(&ctx, DELTA_CTX_SIZE, DELTA_CTX_SIZE, &DB8_LO, &DB8_HI);
+        let dw_lh = apply_wavelet_2d(&ctx, DELTA_CTX_SIZE, DELTA_CTX_SIZE, &DB8_HI, &DB8_LO);
+        let dw_hh = apply_wavelet_2d(&ctx, DELTA_CTX_SIZE, DELTA_CTX_SIZE, &DB8_HI, &DB8_HI);
+
+        let mut coeff_delta = [
+            Box::new([0.0f64; DELTA_CTX_AREA]),
+            Box::new([0.0f64; DELTA_CTX_AREA]),
+            Box::new([0.0f64; DELTA_CTX_AREA]),
+        ];
+        for i in 0..DELTA_CTX_AREA {
+            coeff_delta[0][i] = dw_hl[i].abs();
+            coeff_delta[1][i] = dw_lh[i].abs();
+            coeff_delta[2][i] = dw_hh[i].abs();
+        }
+        delta_w.push(coeff_delta);
+    }
+
+    delta_w
+});
 
 // ─── J-UNIWARD cost computation ───────────────────────────────────────────────
 
@@ -226,25 +261,7 @@ pub fn compute_jwuniward_costs(
     let w_hh = apply_wavelet_2d(&spatial, height, width, &DB8_HI, &DB8_HI);
     let wavelets_cover: [&Vec<f64>; 3] = [&w_hl, &w_lh, &w_hh];
 
-    let basis = precompute_dct_basis();
-
-    let pad = DB8_LO.len(); // 8
-    let ctx_size = 8 + 2 * pad; // 24
-
-    let delta_w: Vec<[Vec<f64>; 3]> = (0..64usize)
-        .map(|coeff_idx| {
-            let mut ctx = vec![0.0f64; ctx_size * ctx_size];
-            for y in 0..8 {
-                for x in 0..8 {
-                    ctx[(y + pad) * ctx_size + (x + pad)] = basis[coeff_idx][y * 8 + x] / 4.0;
-                }
-            }
-            let dw_hl = apply_wavelet_2d(&ctx, ctx_size, ctx_size, &DB8_LO, &DB8_HI);
-            let dw_lh = apply_wavelet_2d(&ctx, ctx_size, ctx_size, &DB8_HI, &DB8_LO);
-            let dw_hh = apply_wavelet_2d(&ctx, ctx_size, ctx_size, &DB8_HI, &DB8_HI);
-            [dw_hl, dw_lh, dw_hh]
-        })
-        .collect();
+    let delta_w = &*DELTA_WAVELETS;
 
     let mut costs = vec![0.0f64; n_blocks * 64];
 
@@ -257,13 +274,13 @@ pub fn compute_jwuniward_costs(
                 let px_c = bc * 8;
                 let block_base = bc * 64;
 
-                let r_lo = (px_r as isize - pad as isize).max(0) as usize;
-                let r_hi = (px_r + 8 + pad).min(height);
-                let r_ctx_off = (pad as isize - px_r as isize).max(0) as usize;
+                let r_lo = px_r.saturating_sub(WAVELET_PAD);
+                let r_hi = (px_r + 8 + WAVELET_PAD).min(height);
+                let r_ctx_off = WAVELET_PAD.saturating_sub(px_r);
 
-                let c_lo = (px_c as isize - pad as isize).max(0) as usize;
-                let c_hi = (px_c + 8 + pad).min(width);
-                let c_ctx_off = (pad as isize - px_c as isize).max(0) as usize;
+                let c_lo = px_c.saturating_sub(WAVELET_PAD);
+                let c_hi = (px_c + 8 + WAVELET_PAD).min(width);
+                let c_ctx_off = WAVELET_PAD.saturating_sub(px_c);
 
                 for coeff_idx in 0..64usize {
                     let dw = &delta_w[coeff_idx];
@@ -276,12 +293,13 @@ pub fn compute_jwuniward_costs(
                         let mut r_ctx = r_ctx_off;
                         for r_img in r_lo..r_hi {
                             let row_w = &w_cover[r_img * width..r_img * width + width];
-                            let dw_row = &dw_k[r_ctx * ctx_size..r_ctx * ctx_size + ctx_size];
+                            let dw_row = &dw_k
+                                [r_ctx * DELTA_CTX_SIZE..r_ctx * DELTA_CTX_SIZE + DELTA_CTX_SIZE];
                             let mut c_ctx = c_ctx_off;
                             for c_img in c_lo..c_hi {
                                 let delta = dw_row[c_ctx];
                                 if delta != 0.0 {
-                                    cost += delta.abs() / (sigma + row_w[c_img].abs());
+                                    cost += delta / (sigma + row_w[c_img].abs());
                                 }
                                 c_ctx += 1;
                             }

@@ -5,7 +5,6 @@ pub struct JpegDct {
     pub blocks: Vec<i16>,
     pub width_blocks: usize,
     pub height_blocks: usize,
-    pub qt: Vec<u16>,
 }
 
 pub unsafe fn read_jpeg_dct(data: &[u8]) -> JpegDct {
@@ -45,17 +44,11 @@ pub unsafe fn read_jpeg_dct(data: &[u8]) -> JpegDct {
             for block_col in 0..width_blocks {
                 let block: &JBLOCK = &*row.add(block_col);
                 let dst_start = (block_row * width_blocks + block_col) * 64;
-                for i in 0..64 {
-                    blocks[dst_start + i] = block[i];
-                }
-            }
-        }
-
-        let qt_ptr = (*cinfo.comp_info).quant_table;
-        let mut qt = vec![1u16; 64];
-        if !qt_ptr.is_null() {
-            for i in 0..64 {
-                qt[i] = (*qt_ptr).quantval[i];
+                std::ptr::copy_nonoverlapping(
+                    block.as_ptr(),
+                    blocks.as_mut_ptr().add(dst_start),
+                    64,
+                );
             }
         }
 
@@ -66,7 +59,6 @@ pub unsafe fn read_jpeg_dct(data: &[u8]) -> JpegDct {
             blocks,
             width_blocks,
             height_blocks,
-            qt,
         }
     }
 }
@@ -107,9 +99,11 @@ pub unsafe fn write_jpeg_dct(
             for block_col in 0..width_blocks {
                 let block: &mut JBLOCK = &mut *row.add(block_col);
                 let src_start = (block_row * width_blocks + block_col) * 64;
-                for i in 0..64 {
-                    block[i] = modified_blocks[src_start + i];
-                }
+                std::ptr::copy_nonoverlapping(
+                    modified_blocks.as_ptr().add(src_start),
+                    block.as_mut_ptr(),
+                    64,
+                );
             }
         }
 
