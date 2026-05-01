@@ -24,7 +24,7 @@ pub use stc::{StcError, StcParams};
 
 use jpeg::{read_jpeg_dct, write_jpeg_dct};
 use stc::{bits_to_bytes, bytes_to_bits, stc_embed, stc_extract};
-use uniward::compute_jwuniward_costs;
+use uniward::{compute_jwuniward_ac_costs, compute_jwuniward_costs};
 
 // ─── Public error type ────────────────────────────────────────────────────────
 
@@ -136,37 +136,29 @@ pub fn embed_with_params(
 ) -> Result<Vec<u8>, JuniwardError> {
     let jpeg = unsafe { read_jpeg_dct(cover) };
 
-    // J-UNIWARD costs
-    let costs = compute_jwuniward_costs(
-        &jpeg.blocks,
-        jpeg.width_blocks,
-        jpeg.height_blocks,
-        cfg.sigma,
-    );
-
     let n_blocks = jpeg.width_blocks * jpeg.height_blocks;
     let ac_len = n_blocks * 63;
     let mut nz_ac = 0usize;
+    let mut usable_ac = 0usize;
     let mut cover_bits = Vec::with_capacity(ac_len);
-    let mut ac_costs = Vec::with_capacity(ac_len);
+    let mut blocked_ac = Vec::with_capacity(ac_len);
 
-    // Build AC-only views and capacity in one cache-friendly pass.
-    for (block, cost_block) in jpeg.blocks.chunks_exact(64).zip(costs.chunks_exact(64)) {
-        for i in 1..64 {
-            let coeff = block[i];
+    // Capacity does not need J-UNIWARD costs, so reject oversized payloads early.
+    for block in jpeg.blocks.chunks_exact(64) {
+        for &coeff in &block[1..] {
             if coeff != 0 {
                 nz_ac += 1;
             }
+            let blocked = coeff == 0 || coeff == 1 || coeff == -1;
+            if !blocked {
+                usable_ac += 1;
+            }
             cover_bits.push((coeff.unsigned_abs() & 1) as u8);
-            ac_costs.push(if coeff == 0 || coeff == 1 || coeff == -1 {
-                f64::INFINITY
-            } else {
-                cost_block[i]
-            });
+            blocked_ac.push(blocked);
         }
     }
 
-    let max_bits = (nz_ac as f64 * cfg.max_bpnzac) as usize;
+    let max_bits = ((nz_ac as f64 * cfg.max_bpnzac) as usize).min(usable_ac);
     let message_bits = bytes_to_bits(message);
 
     if message_bits.len() > max_bits {
@@ -174,6 +166,19 @@ pub fn embed_with_params(
             payload_bits: message_bits.len(),
             max_bits,
         });
+    }
+
+    // J-UNIWARD costs for embeddable AC positions only.
+    let mut ac_costs = compute_jwuniward_ac_costs(
+        &jpeg.blocks,
+        jpeg.width_blocks,
+        jpeg.height_blocks,
+        cfg.sigma,
+    );
+    for (cost, blocked) in ac_costs.iter_mut().zip(blocked_ac) {
+        if blocked {
+            *cost = f64::INFINITY;
+        }
     }
 
     // STC embedding

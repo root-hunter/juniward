@@ -135,20 +135,21 @@ pub fn stc_embed(
         // Calcola parità attuale del gruppo j e trova l'elemento di costo minimo
         let mut parity: u8 = 0;
         let mut min_cost = f64::INFINITY;
-        let mut min_idx = j;
+        let mut min_idx = None;
 
         let mut idx = j;
         while idx < n {
             parity ^= cover_bits[idx];
-            if costs[idx] < min_cost {
+            if costs[idx].is_finite() && costs[idx] < min_cost {
                 min_cost = costs[idx];
-                min_idx = idx;
+                min_idx = Some(idx);
             }
             idx += k;
         }
 
         // Se la parità non corrisponde al bit di messaggio, flippa il minimo-costo
         if parity != message[j] {
+            let min_idx = min_idx.ok_or(StcError::EmbeddingFailed)?;
             stego_bits[min_idx] ^= 1;
         }
     }

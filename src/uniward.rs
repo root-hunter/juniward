@@ -48,11 +48,23 @@ const WAVELET_PAD: usize = DB8_LO.len();
 const DELTA_CTX_SIZE: usize = 8 + 2 * WAVELET_PAD;
 const DELTA_CTX_AREA: usize = DELTA_CTX_SIZE * DELTA_CTX_SIZE;
 
+static IDCT8: LazyLock<[[f64; 8]; 8]> = LazyLock::new(|| {
+    let cos = &*COS8;
+    let mut t = [[0.0f64; 8]; 8];
+    for k in 0..8usize {
+        let c = if k == 0 { ISQRT2 } else { 1.0 };
+        for n in 0..8usize {
+            t[k][n] = c * cos[k][n] * 0.5;
+        }
+    }
+    t
+});
+
 // ─── Separable 8×8 IDCT ───────────────────────────────────────────────────────
 
 #[inline]
 fn idct8x8(block: &[i16], out: &mut [f64; 64]) {
-    let cos = &*COS8;
+    let idct = &*IDCT8;
     let mut tmp = [0.0f64; 64];
 
     // Row pass
@@ -60,10 +72,9 @@ fn idct8x8(block: &[i16], out: &mut [f64; 64]) {
         for x in 0..8usize {
             let mut s = 0.0f64;
             for u in 0..8usize {
-                let cu = if u == 0 { ISQRT2 } else { 1.0 };
-                s += cu * block[v * 8 + u] as f64 * cos[u][x];
+                s += block[v * 8 + u] as f64 * idct[u][x];
             }
-            tmp[v * 8 + x] = s * 0.5;
+            tmp[v * 8 + x] = s;
         }
     }
 
@@ -72,10 +83,9 @@ fn idct8x8(block: &[i16], out: &mut [f64; 64]) {
         for y in 0..8usize {
             let mut s = 0.0f64;
             for v in 0..8usize {
-                let cv = if v == 0 { ISQRT2 } else { 1.0 };
-                s += cv * tmp[v * 8 + x] * cos[v][y];
+                s += tmp[v * 8 + x] * idct[v][y];
             }
-            out[y * 8 + x] = s * 0.5;
+            out[y * 8 + x] = s;
         }
     }
 }
@@ -250,29 +260,59 @@ pub fn compute_jwuniward_costs(
     height_blocks: usize,
     sigma: f64,
 ) -> Vec<f64> {
+    compute_jwuniward_costs_impl(dct_blocks, width_blocks, height_blocks, sigma, 0)
+}
+
+/// Computes J-UNIWARD costs for AC coefficients only, in block-major order.
+///
+/// Layout per block is coefficients 1..64, so the returned vector has
+/// `width_blocks * height_blocks * 63` entries. Embedding never changes DC
+/// coefficients, so this avoids roughly 1/64 of the innermost cost work and
+/// avoids allocating a full 64-coefficient cost plane for the hot path.
+pub fn compute_jwuniward_ac_costs(
+    dct_blocks: &[i16],
+    width_blocks: usize,
+    height_blocks: usize,
+    sigma: f64,
+) -> Vec<f64> {
+    compute_jwuniward_costs_impl(dct_blocks, width_blocks, height_blocks, sigma, 1)
+}
+
+fn compute_jwuniward_costs_impl(
+    dct_blocks: &[i16],
+    width_blocks: usize,
+    height_blocks: usize,
+    sigma: f64,
+    coeff_start: usize,
+) -> Vec<f64> {
     let n_blocks = width_blocks * height_blocks;
     let width = width_blocks * 8;
     let height = height_blocks * 8;
+    let coeffs_per_block = 64 - coeff_start;
 
     let spatial = idct_image(dct_blocks, width_blocks, height_blocks);
 
     let w_hl = apply_wavelet_2d(&spatial, height, width, &DB8_LO, &DB8_HI);
     let w_lh = apply_wavelet_2d(&spatial, height, width, &DB8_HI, &DB8_LO);
     let w_hh = apply_wavelet_2d(&spatial, height, width, &DB8_HI, &DB8_HI);
-    let wavelets_cover: [&Vec<f64>; 3] = [&w_hl, &w_lh, &w_hh];
+    let inv_wavelets = [
+        inverse_abs_denominator(w_hl, sigma),
+        inverse_abs_denominator(w_lh, sigma),
+        inverse_abs_denominator(w_hh, sigma),
+    ];
 
     let delta_w = &*DELTA_WAVELETS;
 
-    let mut costs = vec![0.0f64; n_blocks * 64];
+    let mut costs = vec![0.0f64; n_blocks * coeffs_per_block];
 
     costs
-        .par_chunks_mut(width_blocks * 64)
+        .par_chunks_mut(width_blocks * coeffs_per_block)
         .enumerate()
         .for_each(|(br, chunk)| {
             let px_r = br * 8;
             for bc in 0..width_blocks {
                 let px_c = bc * 8;
-                let block_base = bc * 64;
+                let block_base = bc * coeffs_per_block;
 
                 let r_lo = px_r.saturating_sub(WAVELET_PAD);
                 let r_hi = (px_r + 8 + WAVELET_PAD).min(height);
@@ -282,24 +322,24 @@ pub fn compute_jwuniward_costs(
                 let c_hi = (px_c + 8 + WAVELET_PAD).min(width);
                 let c_ctx_off = WAVELET_PAD.saturating_sub(px_c);
 
-                for coeff_idx in 0..64usize {
+                for coeff_idx in coeff_start..64usize {
                     let dw = &delta_w[coeff_idx];
                     let mut cost = 0.0f64;
 
                     for k in 0..3usize {
-                        let w_cover = wavelets_cover[k];
+                        let inv_cover = &inv_wavelets[k];
                         let dw_k = &dw[k];
 
                         let mut r_ctx = r_ctx_off;
                         for r_img in r_lo..r_hi {
-                            let row_w = &w_cover[r_img * width..r_img * width + width];
+                            let row_inv = &inv_cover[r_img * width..r_img * width + width];
                             let dw_row = &dw_k
                                 [r_ctx * DELTA_CTX_SIZE..r_ctx * DELTA_CTX_SIZE + DELTA_CTX_SIZE];
                             let mut c_ctx = c_ctx_off;
                             for c_img in c_lo..c_hi {
                                 let delta = dw_row[c_ctx];
                                 if delta != 0.0 {
-                                    cost += delta / (sigma + row_w[c_img].abs());
+                                    cost += delta * row_inv[c_img];
                                 }
                                 c_ctx += 1;
                             }
@@ -307,10 +347,17 @@ pub fn compute_jwuniward_costs(
                         }
                     }
 
-                    chunk[block_base + coeff_idx] = cost;
+                    chunk[block_base + coeff_idx - coeff_start] = cost;
                 }
             }
         });
 
     costs
+}
+
+fn inverse_abs_denominator(mut wavelet: Vec<f64>, sigma: f64) -> Vec<f64> {
+    wavelet.par_iter_mut().for_each(|value| {
+        *value = 1.0 / (sigma + value.abs());
+    });
+    wavelet
 }
